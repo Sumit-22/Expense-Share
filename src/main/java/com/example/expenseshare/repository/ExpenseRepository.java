@@ -1,0 +1,7 @@
+package com.example.expenseshare.repository;
+
+import com.example.expenseshare.model.Expense;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ExpenseRepository extends JpaRepository<Expense, Long> {
+}
