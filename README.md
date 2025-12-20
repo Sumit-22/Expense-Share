@@ -4,6 +4,9 @@ A simplified backend implementation of an **expense sharing application** (simil
 This project focuses on **clean design, correct business logic, and balance simplification**.
 
 ---
+## Video Link( API Testing on Postman)
+
+[Watch the video](https://youtu.be/_UdxH5bbheA)
 
 ## Features
 
