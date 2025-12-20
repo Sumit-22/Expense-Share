@@ -2,14 +2,8 @@ package com.example.expenseshare.service;
 
 import com.example.expenseshare.dto.ExpenseRequestDto;
 import com.example.expenseshare.enums.SplitType;
-import com.example.expenseshare.model.Expense;
-import com.example.expenseshare.model.ExpenseSplit;
-import com.example.expenseshare.model.Group;
-import com.example.expenseshare.model.User;
-import com.example.expenseshare.repository.ExpenseRepository;
-import com.example.expenseshare.repository.ExpenseSplitRepository;
-import com.example.expenseshare.repository.GroupRepository;
-import com.example.expenseshare.repository.UserRepository;
+import com.example.expenseshare.model.*;
+import com.example.expenseshare.repository.*;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -21,27 +15,30 @@ public class ExpenseService {
     private final GroupRepository groupRepository;
     private final ExpenseRepository expenseRepository;
     private final ExpenseSplitRepository expenseSplitRepository;
+    private final BalanceRepository balanceRepository;
 
     public ExpenseService(UserRepository userRepository,
                           GroupRepository groupRepository,
                           ExpenseRepository expenseRepository,
-                          ExpenseSplitRepository expenseSplitRepository) {
+                          ExpenseSplitRepository expenseSplitRepository,
+                          BalanceRepository balanceRepository) {
         this.userRepository = userRepository;
         this.groupRepository = groupRepository;
         this.expenseRepository = expenseRepository;
         this.expenseSplitRepository = expenseSplitRepository;
+        this.balanceRepository = balanceRepository;
     }
+
+
 
     public void addExpense(ExpenseRequestDto dto) {
 
-        // 1️⃣ Fetch payer & group
         User paidBy = userRepository.findById(dto.getPaidBy())
                 .orElseThrow(() -> new RuntimeException("PaidBy user not found"));
 
         Group group = groupRepository.findById(dto.getGroupId())
                 .orElseThrow(() -> new RuntimeException("Group not found"));
 
-        // 2️⃣ Save Expense
         Expense expense = new Expense();
         expense.setDescription(dto.getDescription());
         expense.setAmount(dto.getAmount());
@@ -51,21 +48,19 @@ public class ExpenseService {
 
         expense = expenseRepository.save(expense);
 
-        // 3️⃣ Split Logic
         if (dto.getSplitType() == SplitType.EQUAL) {
             handleEqualSplit(dto, expense);
         } else if (dto.getSplitType() == SplitType.EXACT) {
             handleExactSplit(dto, expense);
-        } else if (dto.getSplitType() == SplitType.PERCENT) {
+        } else {
             handlePercentSplit(dto, expense);
         }
     }
 
-    // ================= SPLIT METHODS =================
-
     private void handleEqualSplit(ExpenseRequestDto dto, Expense expense) {
         int totalUsers = dto.getSplits().size();
         double perUserAmount = dto.getAmount() / totalUsers;
+        User paidBy = expense.getPaidBy();
 
         for (Long userId : dto.getSplits().keySet()) {
             User user = userRepository.findById(userId)
@@ -75,12 +70,15 @@ public class ExpenseService {
             split.setExpense(expense);
             split.setUser(user);
             split.setAmount(perUserAmount);
-
             expenseSplitRepository.save(split);
+
+            updateBalance(user, paidBy, perUserAmount);
         }
     }
 
     private void handleExactSplit(ExpenseRequestDto dto, Expense expense) {
+        User paidBy = expense.getPaidBy();
+
         for (Map.Entry<Long, Double> entry : dto.getSplits().entrySet()) {
             User user = userRepository.findById(entry.getKey())
                     .orElseThrow(() -> new RuntimeException("User not found"));
@@ -89,12 +87,15 @@ public class ExpenseService {
             split.setExpense(expense);
             split.setUser(user);
             split.setAmount(entry.getValue());
-
             expenseSplitRepository.save(split);
+
+            updateBalance(user, paidBy, entry.getValue());
         }
     }
 
     private void handlePercentSplit(ExpenseRequestDto dto, Expense expense) {
+        User paidBy = expense.getPaidBy();
+
         for (Map.Entry<Long, Double> entry : dto.getSplits().entrySet()) {
             User user = userRepository.findById(entry.getKey())
                     .orElseThrow(() -> new RuntimeException("User not found"));
@@ -105,8 +106,46 @@ public class ExpenseService {
             split.setExpense(expense);
             split.setUser(user);
             split.setAmount(amount);
-
             expenseSplitRepository.save(split);
+
+            updateBalance(user, paidBy, amount);
         }
+    }
+
+    // ================= BALANCE LOGIC =================
+
+    private void updateBalance(User debtor, User creditor, double amount) {
+
+        if (debtor.getId().equals(creditor.getId())) return;
+
+        var reverse = balanceRepository.findByDebtorAndCreditor(creditor, debtor);
+
+        if (reverse.isPresent()) {
+            Balance rev = reverse.get();
+
+            if (rev.getAmount() > amount) {
+                rev.setAmount(rev.getAmount() - amount);
+                balanceRepository.save(rev);
+            } else if (rev.getAmount() < amount) {
+                balanceRepository.delete(rev);
+                saveOrUpdate(debtor, creditor, amount - rev.getAmount());
+            } else {
+                balanceRepository.delete(rev);
+            }
+        } else {
+            saveOrUpdate(debtor, creditor, amount);
+        }
+    }
+
+    private void saveOrUpdate(User debtor, User creditor, double amount) {
+        Balance balance = balanceRepository
+                .findByDebtorAndCreditor(debtor, creditor)
+                .orElse(new Balance());
+
+        balance.setDebtor(debtor);
+        balance.setCreditor(creditor);
+        balance.setAmount(balance.getAmount() + amount);
+
+        balanceRepository.save(balance);
     }
 }
